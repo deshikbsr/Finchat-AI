@@ -26,8 +26,6 @@ from torchvision import transforms
 import uuid
 import streamlit.components.v1 as components
 from docx.shared import Pt
-from streamlit_javascript import st_javascript
-
 
 # ─── Configuration ──────────────────────────────────────────────────────────────
 GOOGLE_API_KEY = os.environ.get(
@@ -79,7 +77,7 @@ def init_db(db_path: str = "users.db"):
                 cursor.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
             except sqlite3.OperationalError:
                 pass
-
+    
     # Add subscriptions table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS subscriptions (
@@ -90,7 +88,7 @@ def init_db(db_path: str = "users.db"):
             FOREIGN KEY(username) REFERENCES users(username)
         )
     """)
-
+    
     # Interactions table
     cursor.execute(
         """
@@ -105,7 +103,7 @@ def init_db(db_path: str = "users.db"):
         )
         """
     )
-
+    
     # Sessions table for persistent login
     cursor.execute(
         """
@@ -439,21 +437,14 @@ def call_mistral(
     if logit_bias:
         payload["logit_bias"] = logit_bias
 
-    headers = {
-        "Authorization": f"Bearer {MISTRAL_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {MISTRAL_API_KEY}", "Content-Type": "application/json"}
+    resp = requests.post(MISTRAL_ENDPOINT, json=payload, headers=headers, stream=stream)
+    resp.raise_for_status()
+    data = resp.json()
 
-    try:
-        resp = requests.post(MISTRAL_ENDPOINT, json=payload, headers=headers, stream=stream)
-        resp.raise_for_status()
-        data = resp.json()
-        if stream:
-            return "".join(chunk.get("content", "") for chunk in data.get("choices", []))
-        return data["choices"][0]["message"]["content"]
-    except Exception as e:
-        st.error(f"Mistral API error: {e}")
-        return f"Error: {e}"
+    if stream:
+        return "".join(chunk.get("content", "") for chunk in data.get("choices", []))
+    return data["choices"][0]["message"]["content"]
 
 
 def call_deepseek(
@@ -510,14 +501,14 @@ def strip_markdown(text: str) -> str:
 
 
 def lease_summarization_ui(conn):
-    """Lease Summarization: upload PDF and get either full-document or page-by-page summaries with model selection, persisting results for chatbot usage, and answering questions from an uploaded document."""
+    """Lease Summarization: upload PDF and get either full-document or page-by-page summaries with model selection, persisting results for chatbot usage."""
     st.header("📄 Lease Summary")
 
     # Clear previous summary state
     if st.button("Clear Summary", key="clear_lease_summary"):
-        for k in ["last_file", "last_summary", "last_mode", "last_engine", "last_questions", "last_answers"]:
+        for k in ["last_file", "last_summary", "last_mode", "last_engine"]:
             st.session_state.pop(k, None)
-        st.success("Cleared previous summary and questions.")
+        st.success("Cleared previous summary.")
         st.rerun()
 
     st.markdown(
@@ -529,7 +520,7 @@ def lease_summarization_ui(conn):
     )
     if 'last_file' in st.session_state and uploaded_file:
         if st.session_state.last_file != uploaded_file.name:
-            for k in ['last_summary', 'last_mode', 'last_engine', 'last_questions', 'last_answers']:
+            for k in ['last_summary', 'last_mode', 'last_engine']:
                 st.session_state.pop(k, None)
     if not uploaded_file:
         return
@@ -549,12 +540,6 @@ def lease_summarization_ui(conn):
         key="lease_summary_mode"
     )
 
-    # --- New: Initialize question-related session state ---
-    if 'last_questions' not in st.session_state:
-        st.session_state.last_questions = []
-        st.session_state.last_answers = []
-
-    # Display existing summary if available
     if 'last_summary' in st.session_state and st.session_state['last_file'] == uploaded_file.name:
         mode = st.session_state['last_mode']
         engine = st.session_state['last_engine']
@@ -634,14 +619,6 @@ def lease_summarization_ui(conn):
             for para in paragraphs_pdf:
                 pdf.add_section('', [para])
 
-        # --- New: Add questions and answers to PDF if available ---
-        if st.session_state.last_questions and st.session_state.last_answers:
-            pdf.add_page()
-            pdf.add_section('Questions and Answers', [
-                f"Q{i+1}: {q}\nA{i+1}: {a}"
-                for i, (q, a) in enumerate(zip(st.session_state.last_questions, st.session_state.last_answers))
-            ])
-
         pdf_bytes = pdf.output(dest='S').encode('latin-1', 'replace')
         st.download_button(
             "Download Styled PDF",
@@ -661,15 +638,6 @@ def lease_summarization_ui(conn):
         doc.add_paragraph("")
         for para in paragraphs_word:
             doc.add_paragraph(para)
-
-        # --- New: Add questions and answers to Word document ---
-        if st.session_state.last_questions and st.session_state.last_answers:
-            doc.add_heading('Questions and Answers', level=2)
-            for i, (q, a) in enumerate(zip(st.session_state.last_questions, st.session_state.last_answers)):
-                doc.add_paragraph(f"Q{i+1}: {q}", style='Normal')
-                doc.add_paragraph(f"A{i+1}: {a}", style='Normal')
-                doc.add_paragraph("")
-
         buf = io.BytesIO()
         doc.save(buf)
         st.download_button(
@@ -679,73 +647,6 @@ def lease_summarization_ui(conn):
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             key="lease_export_word"
         )
-
-        # --- New: Question Document Upload Section ---
-        st.divider()
-        st.markdown("### ❓ Ask Questions from Document")
-        st.markdown("Upload a document (PDF, DOCX, or TXT) containing questions about the lease summary.")
-
-        question_file = st.file_uploader(
-            "Upload Question Document (PDF, DOCX, TXT)",
-            type=["pdf", "docx", "txt"],
-            key="question_file_uploader"
-        )
-
-        if question_file:
-            try:
-                # Extract text from the uploaded question document
-                if question_file.type == "application/pdf":
-                    reader = PdfReader(question_file)
-                    question_text = "\n".join(page.extract_text() or "" for page in reader.pages)
-                elif question_file.type == "text/plain":
-                    question_text = question_file.read().decode("utf-8")
-                elif question_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-                    doc = docx.Document(question_file)
-                    question_text = "\n".join(p.text for p in doc.paragraphs)
-                else:
-                    st.error("Unsupported file type.")
-                    return
-
-                # Extract questions (assuming questions are separated by newlines or numbered)
-                questions = [
-                    q.strip() for q in question_text.split("\n")
-                    if q.strip() and (q.strip().endswith("?") or re.match(r"^\d+\.|\d+\)", q))
-                ]
-                if not questions:
-                    st.warning("No questions detected in the document. Ensure questions end with '?' or are numbered.")
-                    return
-
-                st.session_state.last_questions = questions
-                st.session_state.last_answers = []
-
-                # Generate answers using the lease summary as context
-                with st.spinner("Generating answers to your questions..."):
-                    for i, question in enumerate(questions):
-                        prompt = (
-                            f"Based on the following lease summary, provide a detailed explanation or reason for this question:\n\n"
-                            f"Summary:\n{summary_content}\n\n"
-                            f"Question: {question}"
-                        )
-                        answer = call_deepseek(
-                            messages=[
-                                {"role": "system", "content": "You are a real estate expert providing explanations based on a lease summary."},
-                                {"role": "user", "content": prompt}
-                            ],
-                            model="deepseek-chat",
-                            temperature=0.3,
-                            max_tokens=512
-                        )
-                        st.session_state.last_answers.append(answer)
-                        save_interaction(conn, "lease_question_answer", question, answer)
-
-                # Display questions and answers
-                st.subheader("Questions and Answers")
-                for i, (q, a) in enumerate(zip(st.session_state.last_questions, st.session_state.last_answers)):
-                    with st.expander(f"Q{i+1}: {q}"):
-                        st.markdown(f"**A{i+1}:** {a}")
-
-            except Exception as e:
-                st.error(f"Failed to process question document: {e}")
 
     if st.button("Generate Summary", key="lease_generate_button"):
         try:
@@ -795,6 +696,7 @@ def lease_summarization_ui(conn):
             save_interaction(conn, "lease_summary_pagewise", uploaded_file.name, json.dumps({f"page_{i}": pages[i-1] for i in range(1, len(pages)+1)}))
             st.session_state['last_summary'] = parts
         st.rerun()
+
 
 def deal_structuring_ui(conn):
     """Enhanced deal structuring with persistent strategy chat until cleared."""
@@ -1397,18 +1299,18 @@ def admin_portal_ui(conn):
 
     with tab2:
         st.subheader("Feature Access Control")
-
+        
         users = conn.execute("SELECT username FROM users").fetchall()
         if not users:
             st.warning("No users found")
         else:
             selected_user = st.selectbox("Select User", [u[0] for u in users])
-
+            
             sub = conn.execute(
                 "SELECT lease_analysis, deal_structuring, offer_generator FROM subscriptions WHERE username = ?",
                 (selected_user,)
             ).fetchone()
-
+            
             if not sub:
                 conn.execute(
                     "INSERT INTO subscriptions (username) VALUES (?)",
@@ -1416,7 +1318,7 @@ def admin_portal_ui(conn):
                 )
                 conn.commit()
                 sub = (0, 0, 0)
-
+                
             col1, col2, col3 = st.columns(3)
             with col1:
                 lease_access = st.toggle("Lease Analysis", value=bool(sub[0]))
@@ -1424,10 +1326,10 @@ def admin_portal_ui(conn):
                 deal_access = st.toggle("Deal Structuring", value=bool(sub[1]))
             with col3:
                 offer_access = st.toggle("Offer Generator", value=bool(sub[2]))
-
+                
             if st.button("Update Access"):
                 conn.execute(
-                    """UPDATE subscriptions
+                    """UPDATE subscriptions 
                     SET lease_analysis = ?, deal_structuring = ?, offer_generator = ?
                     WHERE username = ?""",
                     (int(lease_access), int(deal_access), int(offer_access), selected_user)
@@ -1560,4 +1462,396 @@ def history_ui(conn):
             st.markdown(interaction["output"])
 
         if st.button("← Back to History"):
-            del st.session_state.current_
+            del st.session_state.current_interaction
+            st.rerun()
+        return
+
+    history = conn.execute(
+        "SELECT timestamp, feature, input_text, output_text "
+        "FROM interactions WHERE username = ? ORDER BY timestamp DESC",
+        (st.session_state.username,)
+    ).fetchall()
+
+    if not history:
+        st.info("No history found – your interactions will appear here")
+        return
+
+    for i, (ts, feature, inp, out) in enumerate(history):
+        with st.expander(f"{ts} • {feature}"):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("**Input**")
+                st.text(inp[:500] + ("…" if len(inp) > 500 else ""))
+            with col2:
+                st.write("**Output**")
+                st.text(out[:500] + ("…" if len(out) > 500 else ""))
+
+            if st.button(f"View Full Interaction #{i+1}", key=f"view_full_{i}"):
+                st.session_state.current_interaction = {
+                    "timestamp": ts,
+                    "feature": feature,
+                    "input": inp,
+                    "output": out
+                }
+                st.rerun()
+
+
+def chatbot_ui(conn):
+    """Persistent conversational chatbot beneath features"""
+    if not st.session_state.get("username"):
+        st.warning("Please log in to use the chatbot.")
+        return
+    if "chat_memory" not in st.session_state:
+        st.session_state["chat_memory"] = []
+    st.header("🤖 AI Chatbot")
+    if st.button("Clear Chat", key="clear_chat_button"):
+        st.session_state["chat_memory"] = []
+    st.markdown("Chat with the assistant based on your recent output.")
+    for role, message in st.session_state["chat_memory"]:
+        st.chat_message(role).write(message)
+    user_input = st.chat_input("Type your question...")
+    if user_input:
+        st.session_state["chat_memory"].append(("user", user_input))
+        rows = conn.execute(
+            "SELECT feature, input_text, output_text FROM interactions WHERE username=? ORDER BY timestamp DESC LIMIT 10",
+            (st.session_state.username,)
+        ).fetchall()
+        context = "\n\n".join([f"Feature: {r[0]}\nInput: {r[1]}\nOutput: {r[2]}" for r in rows])
+        prompt = f"Context:\n{context}\n\nQuestion:\n{user_input}"
+        if st.session_state.get("chat_model_choice", "Gemini") == "Gemini":
+            answer = call_gemini("chatbot", prompt)
+        elif st.session_state.get("chat_model_choice") == "Mistral":
+            messages = [
+                {"role": "system", "content": "You are a helpful assistant using past interactions."},
+                {"role": "user", "content": prompt}
+            ]
+            answer = call_mistral(messages)
+        else:
+            messages = [
+                {"role": "system", "content": "You are an AI assistant answering questions based on the user's context."},
+                {"role": "user", "content": prompt}
+            ]
+            answer = call_deepseek(messages)
+        st.session_state["chat_memory"].append(("assistant", answer))
+        st.chat_message("assistant").write(answer)
+        save_interaction(conn, "chatbot", user_input, answer)
+
+
+# def ocr_pdf_to_searchable(input_pdf_bytes, ocr_model=None):
+#     """
+#     Convert a non-selectable PDF (scanned document) into a searchable PDF using OCR.
+#     """
+#     try:
+#         images = convert_from_bytes(input_pdf_bytes)
+#         pdf = FPDF()
+#         pdf.set_auto_page_break(auto=True, margin=15)
+
+#         for img in images:
+#             if ocr_model:
+#                 text = predict_text_with_model(img, ocr_model)
+#             else:
+#                 text = pytesseract.image_to_string(img)
+
+#             pdf.add_page()
+#             img_path = "temp_img.jpg"
+#             img.save(img_path)
+#             pdf.image(img_path, x=10, y=8, w=190)
+#             pdf.set_font("Arial", size=10)
+#             pdf.set_text_color(0, 0, 0, 0)
+#             pdf.multi_cell(0, 5, text)
+#             os.remove(img_path)
+
+#         return pdf.output(dest='S').encode('latin-1')
+
+#     except Exception as e:
+#         st.error(f"OCR PDF conversion failed: {str(e)}")
+#         return None
+
+
+# def ocr_pdf_ui(conn):
+#     """Convert non-selectable PDFs to searchable PDFs using OCR"""
+#     st.header("🔍 OCR PDF Converter")
+#     st.markdown("Convert scanned/non-selectable PDFs into searchable PDF documents with text layers.")
+
+#     with st.expander("⚙️ OCR Configuration", expanded=True):
+#         col1, col2 = st.columns(2)
+#         with col1:
+#             ocr_engine = st.radio("OCR Engine", ["Tesseract", "AI Model"], index=0)
+#             dpi = st.slider("Scan Resolution (DPI)", 150, 600, 300)
+#         with col2:
+#             preserve_layout = st.checkbox("Preserve Original Layout", True)
+#             language = st.selectbox(
+#                 "Document Language",
+#                 ["eng", "fra", "deu", "spa", "por", "chi_sim", "jpn", "kor"]
+#             )
+#             force_ocr = st.checkbox("Force OCR Processing", False)
+
+#     uploaded_file = st.file_uploader("Upload PDF File", type=["pdf"])
+#     if not uploaded_file:
+#         return
+
+#     ocr_model = None
+#     if ocr_engine == "AI Model":
+#         with st.spinner("Loading AI OCR model..."):
+#             try:
+#                 ocr_model = load_ocr_model()
+#                 if ocr_model is None:
+#                     raise ValueError("Model load returned None")
+#             except Exception as e:
+#                 st.error(f"Failed to load AI OCR model: {e}")
+#                 st.info("Falling back to Tesseract engine.")
+#                 ocr_engine = "Tesseract"
+
+#     if st.button("Convert to Searchable PDF"):
+#         file_bytes = uploaded_file.read()
+#         if not file_bytes.startswith(b"%PDF"):
+#             st.error("ⓘ That doesn’t look like a valid PDF.")
+#             return
+
+#         status = st.empty()
+#         if not force_ocr:
+#             try:
+#                 reader = PdfReader(io.BytesIO(file_bytes))
+#                 sample_text = "".join(
+#                     page.extract_text() or "" for page in reader.pages[:2]
+#                 )
+#                 if len(sample_text) > 1000 or (sample_text.count(" ")/len(sample_text) > 0.15):
+#                     st.warning(
+#                         "This PDF appears to have selectable text. Use ‘Force OCR’ to override."
+#                     )
+#                     with st.expander("Extracted Text Sample"):
+#                         st.code(sample_text[:1000] + "…")
+#                     return
+#             except Exception:
+#                 pass
+
+#         texts = []
+#         image_paths = []
+#         success_pages = 0
+
+#         try:
+#             with st.spinner("Converting PDF → images…"):
+#                 images = convert_from_bytes(
+#                     file_bytes,
+#                     dpi=dpi,
+#                     fmt="jpeg",
+#                     thread_count=4,
+#                     strict=False
+#                 )
+#                 if not images:
+#                     raise RuntimeError("No pages found in PDF")
+
+#             for idx, img in enumerate(images):
+#                 status.text(f"🔠 OCR page {idx+1}/{len(images)}…")
+#                 img_path = f"temp_page_{idx}.jpg"
+#                 img.save(img_path, "JPEG", quality=80)
+#                 image_paths.append(img_path)
+
+#                 if ocr_engine == "Tesseract":
+#                     page_text = pytesseract.image_to_string(
+#                         Image.open(img_path),
+#                         lang=language,
+#                         config="--oem 3 --psm 6"
+#                     )
+#                 else:
+#                     page_text = predict_text_with_model(img, ocr_model) or ""
+
+#                 texts.append(page_text)
+#                 success_pages += 1
+
+#             pdf = FPDF()
+#             pdf.set_auto_page_break(True, 15)
+#             pdf.set_creator("PropertyDealsAI OCR Converter")
+
+#             for img_path, page_text in zip(image_paths, texts):
+#                 safe_text = page_text.encode('latin-1', 'ignore').decode('latin-1')
+#                 pdf.add_page()
+#                 if preserve_layout:
+#                     pdf.image(img_path, x=10, y=8, w=190)
+#                 pdf.set_font("Arial", size=10)
+#                 pdf.set_text_color(0, 0, 0)
+#                 pdf.multi_cell(0, 5, safe_text)
+
+#             pdf_bytes = pdf.output(dest='S').encode('latin-1', 'ignore')
+
+#         except Exception as e:
+#             st.error(f"Conversion failed: {e}")
+#             return
+
+#         finally:
+#             status.empty()
+#             for path in image_paths:
+#                 try:
+#                     os.remove(path)
+#                 except OSError:
+#                     pass
+
+#         st.success(f"✅ Converted {success_pages}/{len(texts)} pages.")
+#         with st.expander("📝 OCR Results Preview", expanded=True):
+#             tab1, tab2 = st.tabs(["Extracted Text", "First-Page Preview"])
+#             with tab1:
+#                 preview = "\n\n------\n\n".join(texts)
+#                 st.text(preview[:2000] + ("…" if len(preview) > 2000 else ""))
+#             with tab2:
+#                 st.image(Image.open(image_paths[0]), use_column_width=True)
+
+#         st.download_button(
+#             "💾 Download Searchable PDF",
+#             data=pdf_bytes,
+#             file_name=f"searchable_{uploaded_file.name}",
+#             mime="application/pdf"
+#         )
+
+#         save_interaction(
+#             conn,
+#             "ocr_pdf",
+#             f"{uploaded_file.name} → searchable PDF",
+#             f"Engine={ocr_engine}, DPI={dpi}, Lang={language}"
+#         )
+
+
+def main():
+    """Main application function with comprehensive error handling and persistent outputs"""
+    st.set_page_config(
+        page_title="Property Deals AI",
+        page_icon="🏠",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+
+    st.markdown(
+        f"""
+        <style>
+            .main {{
+                background-color: {BRAND_COLORS['background']};
+            }}
+            .sidebar .sidebar-content {{
+                background-color: {BRAND_COLORS['primary']} !important;
+                color: white;
+            }}
+            h1, h2, h3 {{
+                color: {BRAND_COLORS['primary']};
+            }}
+            .stButton>button {{
+                background-color: {BRAND_COLORS['secondary']};
+                color: white;
+            }}
+            .stTextInput>div>div>input,
+            .stTextArea>div>div>textarea {{
+                background-color: black !important;
+                color: white !important;
+            }}
+            .stTextInput>div>div>input::placeholder,
+            .stTextArea>div>div>textarea::placeholder {{
+                color: white !important;
+                opacity: 1 !important;
+            }}
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    try:
+        conn = init_db()
+        create_default_admin(conn)
+    except sqlite3.Error as e:
+        st.error(f"Failed to initialize database: {e}")
+        return
+
+    if "logged_in" not in st.session_state:
+        st.session_state.update({
+            "logged_in": False,
+            "username": None,
+            "role": None,
+            "subscription": {
+                "lease_analysis": False,
+                "deal_structuring": False,
+                "offer_generator": False
+            },
+            "session_token": None
+        })
+
+
+    login_ui(conn)
+
+    if st.session_state.logged_in:
+        sub = conn.execute(
+            "SELECT lease_analysis, deal_structuring, offer_generator FROM subscriptions WHERE username = ?",
+            (st.session_state.username,)
+        ).fetchone()
+        
+        if not sub and st.session_state.role != "admin":
+            conn.execute(
+                "INSERT INTO subscriptions (username) VALUES (?)",
+                (st.session_state.username,)
+            )
+            conn.commit()
+            sub = (0, 0, 0)
+        elif st.session_state.role == "admin":
+            sub = (1, 1, 1)
+            
+        st.session_state.subscription = {
+            "lease_analysis": bool(sub[0]),
+            "deal_structuring": bool(sub[1]),
+            "offer_generator": bool(sub[2])
+        }
+
+    st.sidebar.title(f"Welcome, {st.session_state.get('username', 'Guest')}")
+    st.sidebar.markdown(f"**Location ID:** {st.session_state.get('location_id', 'Not specified')}")
+
+    features = []
+    if st.session_state.get("logged_in"):
+        if st.session_state.subscription.get("lease_analysis") or st.session_state.role == "admin":
+            features.append("Lease Summarization")
+        if st.session_state.subscription.get("deal_structuring") or st.session_state.role == "admin":
+            features.append("Deal Structuring")
+        if st.session_state.subscription.get("offer_generator") or st.session_state.role == "admin":
+            features.append("Offer Generator")
+        features.append("History")
+        if st.session_state.role == "admin":
+            features.append("Admin Portal")
+        # features.append("OCR PDF")
+
+    selected = st.sidebar.radio("Navigation", features if features else ["Login"])
+
+    if selected and st.session_state.logged_in:
+        try:
+            if selected == "Lease Summarization":
+                lease_summarization_ui(conn)
+            elif selected == "Deal Structuring":
+                deal_structuring_ui(conn)
+            elif selected == "Offer Generator":
+                offer_generator_ui(conn)
+            elif selected == "History":
+                history_ui(conn)
+            # elif selected == "OCR PDF":
+            #     ocr_pdf_ui(conn)
+            elif selected == "Admin Portal" and st.session_state.role == "admin":
+                admin_portal_ui(conn)
+            else:
+                st.error("Access Denied")
+        except Exception as e:
+            st.error(f"Error in {selected} feature: {e}")
+
+    if st.session_state.get("logged_in"):
+        st.divider()
+        chatbot_ui(conn)
+
+    st.sidebar.divider()
+    if st.session_state.get("logged_in") and st.sidebar.button("Logout"):
+        if st.session_state.get("session_token"):
+            delete_session(conn, st.session_state.session_token)
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st_javascript("localStorage.removeItem('session_token'); window.location.reload();")
+        st.rerun()
+
+
+def st_javascript(javascript: str):
+    """Execute JavaScript and return the result."""
+    components.html(f"<script>{javascript}</script>", height=0)
+    return st.session_state.get("_js_result", None)
+
+
+if __name__ == "__main__":
+    main()
