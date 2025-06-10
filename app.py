@@ -1836,8 +1836,9 @@ def main():
             "offer_generator": bool(sub[2])
         }
 
-    st.sidebar.title(f"Welcome, {st.session_state.get('username', 'Guest')}")
-    st.sidebar.markdown(f"**Location ID:** {st.session_state.get('location_id', 'Not specified')}")
+    if st.session_state.get("logged_in"):
+        st.sidebar.title(f"Welcome, {st.session_state.get('username', 'Guest')}")
+        st.sidebar.markdown(f"**Location ID:** {st.session_state.get('location_id', 'Not specified')}")
 
     features = []
     if st.session_state.get("logged_in"):
