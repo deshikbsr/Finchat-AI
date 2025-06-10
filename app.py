@@ -439,14 +439,21 @@ def call_mistral(
     if logit_bias:
         payload["logit_bias"] = logit_bias
 
-    headers = {"Authorization": f"Bearer {MISTRAL_API_KEY}", "Content-Type": "application/json"}
-    resp = requests.post(MISTRAL_ENDPOINT, json=payload, headers=headers, stream=stream)
-    resp.raise_for_status()
-    data = resp.json()
+    headers = {
+        "Authorization": f"Bearer {MISTRAL_API_KEY}",
+        "Content-Type": "application/json"
+    }
 
-    if stream:
-        return "".join(chunk.get("content", "") for chunk in data.get("choices", []))
-    return data["choices"][0]["message"]["content"]
+    try:
+        resp = requests.post(MISTRAL_ENDPOINT, json=payload, headers=headers, stream=stream)
+        resp.raise_for_status()
+        data = resp.json()
+        if stream:
+            return "".join(chunk.get("content", "") for chunk in data.get("choices", []))
+        return data["choices"][0]["message"]["content"]
+    except Exception as e:
+        st.error(f"Mistral API error: {e}")
+        return f"Error: {e}"
 
 
 def call_deepseek(
