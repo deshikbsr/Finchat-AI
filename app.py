@@ -1710,12 +1710,6 @@ def chatbot_ui(conn):
 #         )
 
 
-import streamlit as st
-import streamlit.components.v1 as components
-# ... (other imports remain unchanged)
-
-# ... (previous code for configuration, database helpers, authentication UI, AI helper functions, etc., remains unchanged)
-
 def main():
     """Main application function with comprehensive error handling and persistent outputs"""
     st.set_page_config(
