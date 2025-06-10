@@ -357,7 +357,7 @@ def login_ui(conn):
                     Welcome to Finchat AI Bot
                 </h1>
                 <p style="color: #555555; font-size: 1.1em; margin-top: 0;">
-                    🤖 Powered by Alphax — crafting real estate insights in seconds!
+                    🤖 Powered by Alpha X — crafting real estate insights in seconds!
                 </p>
             </div>
             """,
