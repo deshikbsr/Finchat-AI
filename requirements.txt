@@ -14,3 +14,4 @@ openai
 torch
 mistralai
 streamlit-javascript
+pdf2image
