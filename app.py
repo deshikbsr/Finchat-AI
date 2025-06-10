@@ -1710,6 +1710,12 @@ def chatbot_ui(conn):
 #         )
 
 
+import streamlit as st
+import streamlit.components.v1 as components
+# ... (other imports remain unchanged)
+
+# ... (previous code for configuration, database helpers, authentication UI, AI helper functions, etc., remains unchanged)
+
 def main():
     """Main application function with comprehensive error handling and persistent outputs"""
     st.set_page_config(
@@ -1719,6 +1725,7 @@ def main():
         initial_sidebar_state="expanded"
     )
 
+    # Updated CSS with styles for rectangular buttons
     st.markdown(
         f"""
         <style>
@@ -1735,6 +1742,17 @@ def main():
             .stButton>button {{
                 background-color: {BRAND_COLORS['secondary']};
                 color: white;
+                border-radius: 4px;
+                padding: 10px;
+                width: 100%;
+                border: none;
+                margin-bottom: 8px;
+                transition: all 0.3s ease;
+            }}
+            .stButton>button:hover {{
+                background-color: #e07b00;
+                transform: translateY(-2px);
+                box-shadow: 0 4px 8px rgba(0,0,0,0.2);
             }}
             .stTextInput>div>div>input,
             .stTextArea>div>div>textarea {{
@@ -1745,6 +1763,35 @@ def main():
             .stTextArea>div>div>textarea::placeholder {{
                 color: white !important;
                 opacity: 1 !important;
+            }}
+            /* Custom styles for rectangular buttons */
+            .feature-button {{
+                display: block;
+                width: 100%;
+                padding: 12px;
+                margin-bottom: 8px;
+                background-color: #ffffff;
+                color: {BRAND_COLORS['primary']};
+                border: 2px solid {BRAND_COLORS['primary']};
+                border-radius: 8px;
+                text-align: center;
+                font-size: 16px;
+                font-weight: 500;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                text-decoration: none;
+            }}
+            .feature-button:hover {{
+                background-color: {BRAND_COLORS['primary']};
+                color: white;
+                transform: translateY(-2px);
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            }}
+            .feature-button.selected {{
+                background-color: {BRAND_COLORS['secondary']};
+                color: white;
+                border-color: {BRAND_COLORS['secondary']};
+                font-weight: 600;
             }}
         </style>
         """,
@@ -1770,7 +1817,6 @@ def main():
             },
             "session_token": None
         })
-
 
     login_ui(conn)
 
@@ -1812,7 +1858,79 @@ def main():
             features.append("Admin Portal")
         # features.append("OCR PDF")
 
-    selected = st.sidebar.radio("Navigation", features if features else ["Login"])
+    # Replace radio buttons with rectangular buttons
+    if features:
+        # Initialize selected feature in session state if not set
+        if "selected_feature" not in st.session_state:
+            st.session_state.selected_feature = features[0] if features else "Login"
+
+        # JavaScript to handle button clicks and update session state
+        js_code = """
+        <script>
+            function selectFeature(feature) {
+                // Update selected state
+                document.querySelectorAll('.feature-button').forEach(btn => {
+                    btn.classList.remove('selected');
+                    if (btn.dataset.feature === feature) {
+                        btn.classList.add('selected');
+                    }
+                });
+                // Update Streamlit session state via a hidden input
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.id = 'feature_input';
+                input.value = feature;
+                document.body.appendChild(input);
+                // Trigger Streamlit to detect the change
+                window.parent.postMessage({type: 'streamlit:setComponentValue', value: feature}, '*');
+            }
+        </script>
+        """
+
+        # Generate HTML for buttons
+        buttons_html = f"""
+        <div>
+            {js_code}
+            <h3 style='color: white; margin-bottom: 15px;'>Navigation</h3>
+        """
+        for feature in features:
+            selected_class = "selected" if st.session_state.selected_feature == feature else ""
+            buttons_html += f"""
+            <div class='feature-button {selected_class}' 
+                 data-feature='{feature}' 
+                 onclick='selectFeature("{feature}")'>
+                {feature}
+            </div>
+            """
+        buttons_html += "</div>"
+
+        # Render buttons in sidebar
+        components.html(buttons_html, height=300)
+
+        # Capture selected feature from JavaScript
+        selected = st_javascript("""
+            new Promise(resolve => {
+                window.addEventListener('message', function(e) {
+                    if (e.data.type === 'streamlit:setComponentValue') {
+                        resolve(e.data.value);
+                    }
+                });
+                // Return current value if already set
+                const input = document.getElementById('feature_input');
+                if (input) {
+                    resolve(input.value);
+                }
+            });
+        """)
+
+        # Update selected feature if a new selection is made
+        if selected and selected != st.session_state.selected_feature:
+            st.session_state.selected_feature = selected
+            st.rerun()
+
+        selected = st.session_state.selected_feature
+    else:
+        selected = "Login"
 
     if selected and st.session_state.logged_in:
         try:
@@ -1846,12 +1964,10 @@ def main():
         st_javascript("localStorage.removeItem('session_token'); window.location.reload();")
         st.rerun()
 
-
 def st_javascript(javascript: str):
     """Execute JavaScript and return the result."""
     components.html(f"<script>{javascript}</script>", height=0)
     return st.session_state.get("_js_result", None)
-
 
 if __name__ == "__main__":
     main()
