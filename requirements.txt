@@ -1,0 +1,16 @@
+streamlit
+fpdf
+pytesseract
+pdfplumber
+PyPDF2
+python-docx
+bcrypt
+requests
+pandas
+plotly
+Pillow
+google-generativeai
+openai
+torch
+mistralai
+streamlit-javascript
